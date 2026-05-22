@@ -1,5 +1,6 @@
 build/
 .direnv/
 *.tar.gz
+*.spl
 .DS_Store
 local/
