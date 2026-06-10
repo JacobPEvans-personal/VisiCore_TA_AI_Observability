@@ -1,0 +1,26 @@
+name: Validate
+on:
+  push:
+    paths:
+      - "default/**"
+      - "lookups/**"
+      - "app.manifest"
+      - "scripts/**"
+      - ".github/workflows/validate.yml"
+  pull_request:
+    paths:
+      - "default/**"
+      - "lookups/**"
+      - "app.manifest"
+      - "scripts/**"
+      - ".github/workflows/validate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: JacobPEvans-personal/.github/.github/workflows/_splunk-app-validate.yml@main
+    with:
+      app-name: VisiCore_TA_AI_Observability
