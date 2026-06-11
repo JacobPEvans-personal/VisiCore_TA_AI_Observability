@@ -10,7 +10,8 @@ Repo root IS the Splunk package root. `default/`, `metadata/`, `lookups/` are at
 
 - All config goes in `default/` only (no `local/`) for Splunk Cloud compatibility
 - This TA is invisible in Splunk UI (`is_visible = false`)
-- Token model follows ccusage: input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens
+- Token model follows ccusage; canonical convenience fields: input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens
+- Pricing lives ONLY in `lookups/ai_model_pricing.csv` (wildcard lookup, first-match-wins; `*` catch-all last) — never hardcode prices in macros or SPL
 
 ## Companion App
 
