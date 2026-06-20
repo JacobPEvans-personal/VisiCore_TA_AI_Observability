@@ -1,14 +1,30 @@
 # VisiCore TA for AI Observability
 
 Splunk Technology Add-on providing field extractions, OTel semantic convention aliases, macros, and lookups for AI coding tool observability.
-Companion to [VisiCore_App_for_AI_Observability](https://github.com/JacobPEvans/VisiCore_App_for_AI_Observability).
+
+This TA is a knowledge-object layer only: it defines the field, token, OTel, and CIM
+contracts described below and exposes them through reusable macros. It ships no inputs and
+no dashboards — any Splunk app or search that consumes the field/CIM contract (most simply,
+by calling the `claude_metric_events` macro) renders the data.
 
 ## Architecture
 
+This TA sits at the search-time end of the pipeline. It expects AI coding-tool session
+JSON to already be indexed in Splunk; a typical ingest path is:
+
 ```text
 Filesystem -> Cribl Edge -> Cribl Stream -> Splunk HEC -> Splunk Enterprise
-   (JSON)      (packs)      (routing)       (port 8088)    (index=claude)
+   (JSON)      (collect)     (routing)       (port 8088)    (index=claude)
 ```
+
+**Ingest contract** (what this TA expects upstream to deliver):
+
+- Raw events are the JSON written by AI coding tools (e.g. Claude Code / Gemini CLI session
+  JSONL, OTel logs/metrics).
+- Events land in the per-provider indexes (`claude`, `gemini`, `openai`, `vscode`,
+  `mac_perf`, `os`) with the sourcetypes listed under [Knowledge Objects](#knowledge-objects).
+- The transport (Cribl, HEC, a Universal Forwarder, or direct file ingest) is irrelevant to
+  the TA, as long as the index/sourcetype contract above is met.
 
 ## Knowledge Objects
 
@@ -42,7 +58,8 @@ Aligned with [ccusage](https://github.com/ryoppippi/ccusage). Four token types, 
   Only `*` is special — `[`, `]`, `<`, `>` match literally, so `claude-fable-5*` also matches `claude-fable-5[1m]`
   and `<synthetic>` matches exactly.
 - **Never drop events**: unknown models match the `*` catch-all at $0 and are flagged `pricing_known=false`,
-  which the App surfaces as an "Unpriced Messages" KPI. Add a row (above the catch-all) to price a new model.
+  so a downstream consumer can surface unpriced messages instead of losing them. Add a row (above the
+  catch-all) to price a new model.
 - **Cache creation pricing** uses the 5-minute cache-write rate (1.25x input), matching what Claude Code reports
   in `cache_creation_input_tokens`.
 - **Updating prices**: edit the CSV only, using the official pricing pages
@@ -98,14 +115,17 @@ Aligned with [ccusage](https://github.com/ryoppippi/ccusage). Four token types, 
 
 ## Installation
 
-Install this TA before the companion App:
+Install the TA, then restart Splunk to load its knowledge objects:
 
 ```bash
 splunk install app VisiCore_TA_AI_Observability-*.tar.gz
 splunk restart
 ```
 
-Ensure indexes exist: `claude`, `gemini` (plus `vscode`, `openai`, `mac_perf`, `os` if those feeds are enabled).
+Ensure the indexes named in the ingest contract exist: `claude`, `gemini` (plus `vscode`,
+`openai`, `mac_perf`, `os` if those feeds are enabled). Install this TA before any
+search-time consumer that depends on its macros or field aliases, so the contract is
+resolvable when the consumer loads.
 
 ## Usage
 
@@ -160,3 +180,7 @@ Produces a versioned tarball in `build/`.
 - [ccusage](https://github.com/ryoppippi/ccusage) - Token model reference
 - [Splunk CIM](https://help.splunk.com/en/splunk-enterprise/common-information-model/5.3/data-models/cim-fields-per-associated-data-model)
 - [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+
+---
+
+> Part of a [larger ecosystem of ~40 repos](https://docs.jacobpevans.com) — see how it all fits together.
