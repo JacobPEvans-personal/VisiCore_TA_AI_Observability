@@ -160,3 +160,7 @@ Produces a versioned tarball in `build/`.
 - [ccusage](https://github.com/ryoppippi/ccusage) - Token model reference
 - [Splunk CIM](https://help.splunk.com/en/splunk-enterprise/common-information-model/5.3/data-models/cim-fields-per-associated-data-model)
 - [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing)
+
+---
+
+> Part of a [larger ecosystem of ~40 repos](https://docs.jacobpevans.com) — see how it all fits together.
