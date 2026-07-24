@@ -155,6 +155,25 @@ Validated against local ground truth on a live session: single-digit-minute
 agreement across all 5 categories between the local JSONL path and the
 Splunk-export path.
 
+`fleet_discover.py` closes the "any session, no prior knowledge" gap: it
+discovers every distinct `sessionId` active in `index=claude` over a time
+window (no sessionId needed up front), runs `splunk_retro_timeline` on each,
+and aggregates into one fleet-wide view — total time by category across every
+session, and the top blocking labels (tools, commands, MCP calls) ranked by
+total minutes lost, fleet-wide. This is the direct way to answer "what is
+actually blocking AI agents across the whole homelab, not just one session":
+
+```bash
+VCT_SPLUNK_CLI_DIR=/path/to/vct-splunk-cli \
+  python3 scripts/time_accounting/fleet_discover.py [earliest] [out_prefix]
+```
+
+Validated against production (`-24h`, 14 sessions): correctly surfaced a
+hung `mcp__zammad__zammad_create_ticket` call (216 min, matching a
+single-session finding) and independently found a second, previously-unknown
+orphaned tool call in an unrelated session — proving the fleet-wide rollup
+finds real, actionable stalls that single-session analysis would miss.
+
 ## Packaging
 
 ```bash
