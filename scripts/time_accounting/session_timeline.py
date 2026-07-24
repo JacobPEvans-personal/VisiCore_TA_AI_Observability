@@ -27,7 +27,20 @@ from datetime import datetime, timezone
 
 UTC_NOW = datetime.now(timezone.utc)
 
-CATEGORIES = ["TOOL_EXEC", "SUBAGENT_WAIT", "MODEL_ACTIVE", "HUMAN_IDLE", "SYSTEM_OVERHEAD"]
+# MODEL_ACTIVE is split in two: Claude Code sometimes logs an empty placeholder
+# "thinking" block as its own assistant-type transcript line, with the real
+# content (text or a tool call) arriving on a SEPARATE line a moment later --
+# verified directly against a live session (empty-thinking line at
+# 14:58:56.078Z, real 172-char text line at 14:58:57.080Z, one second apart).
+# A naive "gap before the next assistant event = thinking" classifier pins the
+# whole gap's duration on whichever line comes next, which is sometimes the
+# empty placeholder -- so it can't distinguish confirmed generation from time
+# whose outcome isn't visible in this transcript. Measured on a live session:
+# 44.4% of what a single MODEL_ACTIVE bucket would report as "thinking" time
+# lands on a transcript line with zero measurable text/thinking/tool-input
+# chars. Report both, never collapse them back into one confident number.
+CATEGORIES = ["TOOL_EXEC", "SUBAGENT_WAIT", "MODEL_ACTIVE_CONFIRMED", "MODEL_ACTIVE_UNVERIFIED",
+              "HUMAN_IDLE", "SYSTEM_OVERHEAD"]
 
 
 def parse_ts(s):
@@ -69,12 +82,24 @@ def primary_events(lines):
         content = msg.get("content")
         if t == "assistant":
             tool_uses = []
+            content_chars = 0
+            tool_input_chars = 0
             if isinstance(content, list):
                 for block in content:
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                        tool_uses.append({"id": block.get("id"), "name": block.get("name"),
-                                           "input": block.get("input") or {}})
-            events.append({"kind": "assistant", "ts": ts, "tool_uses": tool_uses, "uuid": ln.get("uuid")})
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "tool_use":
+                        tu_input = block.get("input") or {}
+                        tool_uses.append({"id": block.get("id"), "name": block.get("name"), "input": tu_input})
+                        tool_input_chars += len(json.dumps(tu_input))
+                    elif block.get("type") in ("text", "thinking"):
+                        content_chars += len(block.get("text") or block.get("thinking") or "")
+            # output_chars is the full "did this line produce anything measurable" signal:
+            # text/thinking content plus tool_use input size (a pure tool call with no
+            # narration still legitimately produced something -- deciding the tool and
+            # generating its input args -- so it must count as confirmed output too).
+            events.append({"kind": "assistant", "ts": ts, "tool_uses": tool_uses, "uuid": ln.get("uuid"),
+                            "output_chars": content_chars + tool_input_chars})
         else:  # user
             first_block = content[0] if isinstance(content, list) and content else None
             if isinstance(first_block, dict) and first_block.get("type") == "tool_result":
@@ -97,6 +122,9 @@ def label_tool(tu):
         return f"Bash: {cmd[:80]}"
     if name.startswith("mcp__"):
         return f"MCP: {name}"
+    if name == "TaskOutput":
+        tid = (tu.get("input") or {}).get("task_id", "?")
+        return f"TaskOutput: task_id={tid}"
     path = (tu.get("input") or {}).get("file_path")
     return f"{name}: {path}" if path else name
 
@@ -122,7 +150,13 @@ def build_timeline(events, hook_ms_total, subagent_windows=None, extend_to=None)
             gap_start = last_content_ts
             gap_end = e["ts"]
             if gap_start is not None and gap_end > gap_start:
-                segments.append([gap_start, gap_end, "MODEL_ACTIVE", "model thinking+generating"])
+                if e["output_chars"] > 0:
+                    segments.append([gap_start, gap_end, "MODEL_ACTIVE_CONFIRMED",
+                                      f"model thinking+generating ({e['output_chars']} chars produced)"])
+                else:
+                    segments.append([gap_start, gap_end, "MODEL_ACTIVE_UNVERIFIED",
+                                      "gap before a transcript line with no measurable output "
+                                      "(likely an empty placeholder block; real content may be on the next line)"])
             for tu in e["tool_uses"]:
                 if tu["id"]:
                     pending_tool_uses[tu["id"]] = (e["ts"], tu)
@@ -213,6 +247,25 @@ def build_timeline(events, hook_ms_total, subagent_windows=None, extend_to=None)
             cur = oe_
         if cur < end:
             result.append([cur, end, "HUMAN_IDLE", label])
+
+    # TaskOutput (and other backgrounded polling calls) is a black box on its own --
+    # "waiting 150 minutes on TaskOutput" doesn't say on WHAT. Attribute each such
+    # call to whichever subagent(s) were actually running during its span, via the
+    # same window-overlap logic used above for idle gaps -- never leave "waiting on
+    # a subagent" unresolved when the subagent's own activity window is known.
+    if subagent_windows:
+        attributed = []
+        for start, end, cat, label in result:
+            if not label.startswith("TaskOutput") or not subagent_windows:
+                attributed.append([start, end, cat, label])
+                continue
+            overlaps = [w_label for w_start, w_end, w_label in subagent_windows
+                        if max(start, w_start) < min(end, w_end)]
+            if overlaps:
+                attributed.append([start, end, "SUBAGENT_WAIT", f"{label} (waiting on: {', '.join(overlaps)})"])
+            else:
+                attributed.append([start, end, cat, label + " (background task, no matching subagent window)"])
+        result = attributed
 
     result.sort(key=lambda s: s[0])
     return result, hook_ms_total
@@ -334,6 +387,10 @@ def main():
             pct = (v / sub_total * 100) if sub_total else 0
             display = "HUMAN_IDLE (awaiting orchestrator follow-up)" if c == "HUMAN_IDLE" else c
             lines_out.append(f"| {display} | {v/60:.1f} min | {pct:.1f}% |")
+        lines_out.append("\n_Top time sinks for this subagent (what it was actually doing/waiting on):_\n")
+        lines_out.append("| Label | Duration |\n|---|---|")
+        for label, v in r["top"]:
+            lines_out.append(f"| {label} | {v/60:.1f} min |")
 
     (out_prefix.with_suffix(".md")).write_text("\n".join(lines_out) + "\n")
     print(f"Wrote {out_prefix.with_suffix('.json')} and {out_prefix.with_suffix('.md')}")
