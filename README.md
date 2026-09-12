@@ -14,7 +14,7 @@ Filesystem -> Cribl Edge -> Cribl Stream -> Splunk HEC -> Splunk Enterprise
 
 - **props.conf** - Field extractions for 30 sourcetypes (Claude, Gemini, Antigravity, VS Code, GitHub Copilot, macOS)
 - **transforms.conf** - Wildcard model-pricing lookup definition
-- **macros.conf** - 13 reusable search macros (index filters, base filters, dedup, token extraction, lookup-driven cost calc, tools, cache)
+- **macros.conf** - 14 reusable search macros (index filters, base filters, dedup, token extraction, lookup-driven cost calc, tools, cache, time-accounting)
 - **eventtypes.conf** - 7 event types for Claude, Gemini, and Copilot events
 - **tags.conf** - ai/llm/genai tags for CIM compliance
 - **lookups/** - `ai_model_pricing.csv` wildcard pricing table
@@ -65,6 +65,7 @@ Aligned with [ccusage](https://github.com/ryoppippi/ccusage). Four token types, 
 | `claude_metric_events` | **Canonical dashboard base**: assistant events, deduped, with tokens + cost |
 | `extract_tools` | Tool-use extraction with CIM Change fields |
 | `calculate_cache_pct` | Per-event cache hit percentage |
+| `claude_time_accounting_by_gap(sessionId)` | Full (unfiltered) per-gap time accounting into 6 buckets: `TOOL_EXEC`, `SUBAGENT_WAIT`, `MODEL_ACTIVE_CONFIRMED`, `MODEL_ACTIVE_UNVERIFIED`, `HUMAN_IDLE`, `SYSTEM_OVERHEAD`. Pass a real `sessionId` for one session, or `"*"` for fleet-wide. Classification is per-`source` in isolation — see [Time Accounting Tool](#time-accounting-tool) for cross-source overlap correlation, and for why "model thinking" is split into confirmed vs. unverified. |
 
 ## OTel Field Mapping
 
@@ -121,6 +122,75 @@ except `<synthetic>` and genuinely unknown models:
 ```spl
 `claude_metric_events` | stats sum(cost_usd) as cost, count by model, pricing_known
 ```
+
+## Time Accounting Tool
+
+`claude_time_accounting_by_gap` classifies gaps per-`source` (one session or
+subagent JSONL file) in isolation, so it can't tell that a `HUMAN_IDLE`-looking
+gap in the main session actually overlapped with a concurrently-running
+subagent in a *different* `source` file — that needs cross-file timestamp
+interval correlation, which SPL's `join` handles poorly (silently dropped join
+keys, `overwrite=true` clobbering group-by fields, uncontrolled cross-products).
+
+**Why "model thinking" is split into confirmed vs. unverified**: an earlier
+version of this macro reported one `MODEL_ACTIVE` bucket for any gap with no
+tool_use and no text content, implying every such gap was legitimate
+generation time. Verified directly against production (2026-07-24): 100% of
+the rows that reach that branch have EMPTY thinking content — Claude Code logs
+an empty placeholder `thinking` block as its own transcript row, with the real
+content (text or a tool call) landing on a *separate* row moments later. A
+single confident `MODEL_ACTIVE` number was therefore overclaiming — this
+macro's own gap-attribution model (classify the gap *after* a row, by that
+row's own content) structurally routes every row with real content into
+`HUMAN_IDLE`/`TOOL_EXEC` before it can ever reach the `MODEL_ACTIVE` branch,
+so `MODEL_ACTIVE_CONFIRMED` will read near-zero via this macro specifically —
+that's an accurate reflection of what this gap shape can prove, not a bug. The
+Python tool below uses a different attribution model (classify the gap
+*before* each row, by that row's own output) and found a materially different
+split on a live session (~56% confirmed / ~44% unverified) — the two numbers
+are not directly comparable, both are correct under their own definitions.
+
+`scripts/time_accounting/` provides a Python complement for exactly this case:
+
+- `session_timeline.py` — the core classifier (stdlib only). Same 6-bucket
+  taxonomy as the macro, but pairs `tool_use`/`tool_result` by ID, reads hook
+  `durationMs` directly, and reclassifies a parent session's gaps as
+  `SUBAGENT_WAIT` whenever they overlap a subagent's observed time window.
+- `splunk_retro_timeline.py` — runs the same classifier against events
+  exported from Splunk (`index=claude`) instead of local JSONL, so it works for
+  any session/subagent set still present in Splunk, from any machine that ever
+  shipped to this instance. Requires a
+  [vct-splunk-cli](https://github.com/JacobPEvans-personal/vct-splunk-cli)
+  checkout; point `VCT_SPLUNK_CLI_DIR` at it (no default — this repo is public
+  and must not embed a local path layout):
+
+  ```bash
+  VCT_SPLUNK_CLI_DIR=/path/to/vct-splunk-cli \
+    python3 scripts/time_accounting/splunk_retro_timeline.py <sessionId> [earliest] [out_prefix] [--extend-to-now]
+  ```
+
+Validated against local ground truth on a live session: single-digit-minute
+agreement across all 5 categories between the local JSONL path and the
+Splunk-export path.
+
+`fleet_discover.py` closes the "any session, no prior knowledge" gap: it
+discovers every distinct `sessionId` active in `index=claude` over a time
+window (no sessionId needed up front), runs `splunk_retro_timeline` on each,
+and aggregates into one fleet-wide view — total time by category across every
+session, and the top blocking labels (tools, commands, MCP calls) ranked by
+total minutes lost, fleet-wide. This is the direct way to answer "what is
+actually blocking AI agents across the whole homelab, not just one session":
+
+```bash
+VCT_SPLUNK_CLI_DIR=/path/to/vct-splunk-cli \
+  python3 scripts/time_accounting/fleet_discover.py [earliest] [out_prefix]
+```
+
+Validated against production (`-24h`, 14 sessions): correctly surfaced a
+hung `mcp__zammad__zammad_create_ticket` call (216 min, matching a
+single-session finding) and independently found a second, previously-unknown
+orphaned tool call in an unrelated session — proving the fleet-wide rollup
+finds real, actionable stalls that single-session analysis would miss.
 
 ## Packaging
 
