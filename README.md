@@ -10,12 +10,13 @@ Filesystem -> Cribl Edge -> Cribl Stream -> Splunk HEC -> Splunk Enterprise
    (JSON)      (packs)      (routing)       (port 8088)    (index=claude)
 ```
 
-The daily Cribl Stream REST collector sends LiteLLM's official
-`model_prices_and_context_window.json` file as one HEC event to `index=llm_pricefeed`,
-`sourcetype=litellm:pricefile`. The `LiteLLM price file to lookup` search runs
-daily at 04:30 server time, reads the newest feed event from the prior 30 hours, and writes the app
-lookup `lookups/litellm_model_prices.csv`. The lookup keeps models with input and output rates; cache
-rates are retained when present.
+The daily Cribl REST collector retrieves LiteLLM's official
+`model_prices_and_context_window.json` document. A Cribl pipeline unrolls the document into one small
+JSON event per model, with the exact model key, both base rates, and optional cache rates. Models
+without both base rates are omitted. The events use `index=llm_pricefeed` and
+`sourcetype=litellm:price`. The `LiteLLM price file to lookup` search runs daily at 04:30, reads
+events from the prior 30 hours, keeps the latest rates for each model, and writes the app lookup
+`lookups/litellm_model_prices.csv`.
 
 ## Knowledge Objects
 
