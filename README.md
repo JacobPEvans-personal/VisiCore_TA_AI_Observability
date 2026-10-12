@@ -10,6 +10,13 @@ Filesystem -> Cribl Edge -> Cribl Stream -> Splunk HEC -> Splunk Enterprise
    (JSON)      (packs)      (routing)       (port 8088)    (index=claude)
 ```
 
+The daily Cribl Stream REST collector sends LiteLLM's official
+`model_prices_and_context_window.json` file as one HEC event to `index=llm_pricefeed`,
+`sourcetype=litellm:pricefile`. The `LiteLLM price file to lookup` search runs
+daily at 04:30 server time, reads the newest feed event from the prior 30 hours, and writes the app
+lookup `lookups/litellm_model_prices.csv`. The lookup keeps models with input and output rates; cache
+rates are retained when present.
+
 ## Knowledge Objects
 
 - **props.conf** - Field extractions for 30 sourcetypes (Claude, Gemini, Antigravity, VS Code, GitHub Copilot, macOS)
@@ -33,9 +40,11 @@ Aligned with [ccusage](https://github.com/ryoppippi/ccusage). Four token types, 
 
 ## Cost Fields
 
-`calculate_cost` sets `cost_usd` to `tonumber(coalesce(response_cost, cost_usd))` for each event. LiteLLM spend-log JSON
-uses `sourcetype=litellm:spend` so `response_cost` is extracted automatically. Events without either field receive no
-inferred cost.
+`calculate_cost` uses numeric `response_cost` when present, including LiteLLM spend events with
+`sourcetype=litellm:spend`. Otherwise it matches `model` to an exact key using case-insensitive comparison against
+`litellm_model_prices` and multiplies the four token counts by their per-token rates. An unknown model,
+or a missing cache rate when that cache count is positive, produces a null `cost_usd` and
+`pricing_known=false`.
 
 ## Macros
 
@@ -47,8 +56,8 @@ inferred cost.
 | `claude_all_session_events` | Session + subagent events |
 | `dedup_messages` | Null-safe dedup by `messageId:requestId` |
 | `extract_tokens` | Canonical 4-token convenience fields + `total_tokens` |
-| `calculate_cost` | Numeric reported `response_cost`, preserving an existing `cost_usd` (includes `extract_tokens`) |
-| `claude_metric_events` | **Canonical Claude session base**: assistant events, deduped, with tokens and supplied cost fields |
+| `calculate_cost` | Reported `response_cost` or LiteLLM per-token lookup pricing; leaves unpriced events null (includes `extract_tokens`) |
+| `claude_metric_events` | **Canonical Claude session base**: assistant events, deduped, with tokens, `cost_usd`, and `pricing_known` |
 | `extract_tools` | Tool-use extraction with CIM Change fields |
 | `calculate_cache_pct` | Per-event cache hit percentage |
 
@@ -91,14 +100,14 @@ splunk install app VisiCore_TA_AI_Observability-*.tar.gz
 splunk restart
 ```
 
-Ensure indexes exist: `claude`, `gemini`, `ai_usage` (plus `vscode`, `openai`, `mac_perf`, `os` if those feeds are enabled).
+Ensure indexes exist: `claude`, `gemini`, `ai_usage`, `llm_pricefeed` (plus `vscode`, `openai`, `mac_perf`, `os` if those feeds are enabled).
 
 ## Usage
 
 Use the composed macro for Claude session analysis:
 
 ```spl
-`claude_metric_events` | timechart sum(total_tokens) as tokens
+`claude_metric_events` | timechart sum(total_tokens) as tokens, sum(cost_usd) as cost
 ```
 
 Use LiteLLM spend events for per-request cost totals:
@@ -107,7 +116,8 @@ Use LiteLLM spend events for per-request cost totals:
 index=ai_usage sourcetype="litellm:spend" | `calculate_cost` | stats sum(cost_usd) as cost, count as requests by model
 ```
 
-Claude session events without a source `response_cost` or `cost_usd` retain token counts but have no inferred cost.
+Claude session events use the daily LiteLLM model lookup when `response_cost` is absent. Searches that
+sum or average `cost_usd` ignore null event costs, and `pricing_known` identifies unpriced events.
 
 ## Packaging
 
