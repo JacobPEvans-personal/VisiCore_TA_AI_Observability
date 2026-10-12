@@ -3,12 +3,14 @@ on:
   push:
     paths:
       - "default/**"
+      - "lookups/**"
       - "app.manifest"
       - "scripts/**"
       - ".github/workflows/validate.yml"
   pull_request:
     paths:
       - "default/**"
+      - "lookups/**"
       - "app.manifest"
       - "scripts/**"
       - ".github/workflows/validate.yml"

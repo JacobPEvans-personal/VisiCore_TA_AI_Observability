@@ -2,3 +2,8 @@
 owner = admin
 access = read : [ * ], write : [ admin, sc_admin ]
 export = system
+
+[savedsearches/LiteLLM price file to lookup]
+owner = admin
+access = read : [ * ], write : [ admin, sc_admin ]
+export = system

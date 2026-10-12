@@ -21,6 +21,7 @@ tar -czf "$BUILD_DIR/${APP_NAME}-${version}.tar.gz" \
     -C "$REPO_ROOT" \
     app.manifest \
     default \
+    lookups \
     metadata
 
 echo "  -> ${APP_NAME}-${version}.tar.gz"
