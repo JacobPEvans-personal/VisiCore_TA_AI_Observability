@@ -4,14 +4,14 @@ Splunk Technology Add-on providing knowledge objects for AI coding tool observab
 
 ## Structure
 
-Repo root IS the Splunk package root. `default/`, `metadata/`, `lookups/` are at the top level.
+Repo root IS the Splunk package root. `default/` and `metadata/` are at the top level.
 
 ## Development Rules
 
 - All config goes in `default/` only (no `local/`) for Splunk Cloud compatibility
 - This TA is invisible in Splunk UI (`is_visible = false`)
 - Token model follows ccusage; canonical convenience fields: input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, total_tokens
-- Pricing lives ONLY in `lookups/ai_model_pricing.csv` (wildcard lookup, first-match-wins; `*` catch-all last) — never hardcode prices in macros or SPL
+- `calculate_cost` uses numeric per-event `response_cost` when present and preserves an event's existing `cost_usd`; never add a model-price table
 
 ## Companion App
 

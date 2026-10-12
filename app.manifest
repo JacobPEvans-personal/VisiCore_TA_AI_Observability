@@ -21,7 +21,7 @@
             "Web": "4.x",
             "Interprocess Messaging": "4.x"
         },
-        "description": "Technology Add-on providing field extractions, OTel semantic convention aliases, macros, and lookups for AI observability data from Claude, Gemini, and other LLM providers.",
+        "description": "Technology Add-on providing field extractions, OTel semantic convention aliases, and macros for AI observability data from Claude, Gemini, and other LLM providers.",
         "id": {
             "group": null,
             "name": "VisiCore_TA_AI_Observability",
