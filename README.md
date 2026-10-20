@@ -14,7 +14,7 @@ Filesystem -> Cribl Edge -> Cribl Stream -> Splunk HEC -> Splunk Enterprise
 
 - **props.conf** - Field extractions for 30 sourcetypes (Claude, Gemini, Antigravity, VS Code, GitHub Copilot, macOS)
 - **transforms.conf** - Wildcard model-pricing lookup definition
-- **macros.conf** - 13 reusable search macros (index filters, base filters, dedup, token extraction, lookup-driven cost calc, tools, cache)
+- **macros.conf** - 14 reusable search macros (index filters, base filters, dedup, token extraction, lookup-driven cost calc, tools, cache, time-accounting)
 - **eventtypes.conf** - 7 event types for Claude, Gemini, and Copilot events
 - **tags.conf** - ai/llm/genai tags for CIM compliance
 - **lookups/** - `ai_model_pricing.csv` wildcard pricing table
@@ -65,6 +65,7 @@ Aligned with [ccusage](https://github.com/ryoppippi/ccusage). Four token types, 
 | `claude_metric_events` | **Canonical dashboard base**: assistant events, deduped, with tokens + cost |
 | `extract_tools` | Tool-use extraction with CIM Change fields |
 | `calculate_cache_pct` | Per-event cache hit percentage |
+| `claude_time_accounting_by_gap(sessionId)` | Full (unfiltered) per-gap time accounting into 6 buckets: `TOOL_EXEC`, `SUBAGENT_WAIT`, `MODEL_ACTIVE_CONFIRMED`, `MODEL_ACTIVE_UNVERIFIED`, `HUMAN_IDLE`, `SYSTEM_OVERHEAD`. Pass a real `sessionId` for one session, or `"*"` for fleet-wide. Classification is per-`source` in isolation — see [Time Accounting Tool](#time-accounting-tool) for what that misses, and for why "model thinking" is split into confirmed vs. unverified. |
 
 ## OTel Field Mapping
 
@@ -121,6 +122,29 @@ except `<synthetic>` and genuinely unknown models:
 ```spl
 `claude_metric_events` | stats sum(cost_usd) as cost, count by model, pricing_known
 ```
+
+## Time Accounting Tool
+
+`claude_time_accounting_by_gap` classifies gaps per-`source` (one session or
+subagent JSONL file) in isolation, so it can't tell that a `HUMAN_IDLE`-looking
+gap in the main session actually overlapped with a concurrently-running
+subagent in a *different* `source` file — that needs cross-file timestamp
+interval correlation, which SPL's `join` handles poorly (silently dropped join
+keys, `overwrite=true` clobbering group-by fields, uncontrolled cross-products).
+
+**Why "model thinking" is split into confirmed vs. unverified**: an earlier
+version of this macro reported one `MODEL_ACTIVE` bucket for any gap with no
+tool_use and no text content, implying every such gap was legitimate
+generation time. Verified directly against production (2026-07-24): 100% of
+the rows that reach that branch have EMPTY thinking content — Claude Code logs
+an empty placeholder `thinking` block as its own transcript row, with the real
+content (text or a tool call) landing on a *separate* row moments later. A
+single confident `MODEL_ACTIVE` number was therefore overclaiming — this
+macro's own gap-attribution model (classify the gap *after* a row, by that
+row's own content) structurally routes every row with real content into
+`HUMAN_IDLE`/`TOOL_EXEC` before it can ever reach the `MODEL_ACTIVE` branch,
+so `MODEL_ACTIVE_CONFIRMED` will read near-zero via this macro specifically —
+that's an accurate reflection of what this gap shape can prove, not a bug.
 
 ## Packaging
 
